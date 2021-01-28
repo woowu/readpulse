@@ -1,0 +1,17 @@
+{
+  "name": "read-pulse",
+  "version": "1.0.0",
+  "description": "",
+  "main": "readpulse.js",
+  "bin": "readpulse.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "serialport": "^9.0.6",
+    "yargs": "^16.2.0"
+  }
+}
