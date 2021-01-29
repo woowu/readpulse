@@ -1,6 +1,7 @@
 #!/usr/bin/node --harmony
 'use strict';
 
+const fs = require('fs');
 const serialport = require('serialport');
 const yargs = require('yargs');
 const { hideBin } = require('yargs/helpers');
@@ -21,11 +22,15 @@ const argv = yargs(hideBin(process.argv))
 
     .alias('p', 'period')
     .describe('p', 'counting period in secs')
-    .default('p', 1800)
+    .default('p', 3600)
 
     .number('stop')
     .alias('s', 'stop-after')
     .describe('s', 'stop after n counting periods')
+
+    .option('log')
+    .alias('l', 'log')
+    .describe('l', 'log to csv file <filename>')
 
     .count('verbose')
     .alias('v', 'verbose')
@@ -47,6 +52,7 @@ var pulseCnt;
 var sofarExpectedPulses = 0;
 var sofarMeasuredPulses = 0;
 var countingWindowsNum = 0;
+var logs = null;
 
 /**
  * The input pulse has duty cycle of 50%. The idea is to let
@@ -88,6 +94,8 @@ function endCountingWindow (t, nPulses) {
     const ppm = Math.round(err/expectedPulseCnt * 1000000);
     const ppmSofar = Math.round(sofarErr/sofarExpectedPulses * 1000000);
     console.log(`${timestamp}: ${expectedPulseCnt} ${err} ${ppm} PPM ${sofarExpectedPulses} ${sofarErr} ${ppmSofar} PPM`);
+    if (logs)
+        logs.write(`${t.valueOf()},${expectedPulseCnt},${err},${ppm}\n`);
 
     if (maxCountingWindowsNum && ++countingWindowsNum == maxCountingWindowsNum)
         process.exit(0);
@@ -113,7 +121,11 @@ if (countingPeriod < pulsePeriod) {
     console.error('reporting period too short');
     process.exit(1);
 }
-console.log('baudrate ' + baud);
+if (argv.log) {
+    logs = fs.createWriteStream(argv.log);
+    fs.write('Time,ExpectedPulses,Error,PPM\n');
+}
+console.log('use baudrate ' + baud);
 
 const port = new serialport(argv.device, {
     baudRate: baud,
@@ -130,4 +142,9 @@ port.on('data', data => {
         return;
     }
     ++pulseCnt;
+});
+
+process.on('SIGINT', () => {
+    if (logs) logs.end();
+    process.exit(2);
 });
