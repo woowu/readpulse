@@ -123,7 +123,7 @@ if (countingPeriod < pulsePeriod) {
 }
 if (argv.log) {
     logs = fs.createWriteStream(argv.log);
-    fs.write('Time,ExpectedPulses,Error,PPM\n');
+    logs.write('Time,ExpectedPulses,Error,PPM\n');
 }
 console.log('use baudrate ' + baud);
 
