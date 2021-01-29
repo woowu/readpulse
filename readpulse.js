@@ -7,25 +7,46 @@ const { hideBin } = require('yargs/helpers');
 
 const argv = yargs(hideBin(process.argv))
     .usage('Usage: $0 [options]')
+
     .alias('d', 'device')
     .describe('d', 'serial device')
+
     .alias('f', 'freq')
     .default('f', 1)
     .describe('f', 'frequency of input pulse in Hz')
+
+    .number('baud')
+    .alias('b', 'baud')
+    .describe('b', 'baudrate (auto-calc from the frequency if not specified)')
+
     .alias('p', 'period')
-    .describe('p', 'reporting period in secs')
+    .describe('p', 'counting period in secs')
     .default('p', 1800)
+
+    .number('stop')
+    .alias('s', 'stop-after')
+    .describe('s', 'stop after n counting periods')
+
+    .count('verbose')
+    .alias('v', 'verbose')
+    .describe('v', 'verbose')
+
     .demandOption(['f', 'd'])
     .help('h')
     .epilog('copyright 2029')
     .argv;
 
-const reportingPeriod = +argv.period; /* seconds  */
+const countingPeriod = +argv.period; /* secs  */
 const freq = +argv.freq;
-const baud = calcBaud(freq);
-var started = false;
+const pulsePeriod = 1/freq;
+const baud = (! argv.baud) ? calcBaud(freq) : argv.baud;
+const maxCountingWindowsNum = argv.s;
+var countingTimer = null;
+var countingWindowEndTime;
 var pulseCnt;
-var lastPulseTime;
+var sofarExpectedPulses = 0;
+var sofarMeasuredPulses = 0;
+var countingWindowsNum = 0;
 
 /**
  * The input pulse has duty cycle of 50%. The idea is to let
@@ -44,7 +65,7 @@ function calcBaud (freq) {
     ];
     const duration = 1/freq/2;
     const bitTime = duration/9;
-    var baud = Math.ceil(1/bitTime);
+    var baud = Math.ceil(1/bitTime) * 1.5;
 
     for (var i = 0; i < standardBauds.length; ++i) {
         if (standardBauds[i] >= baud) {
@@ -55,29 +76,40 @@ function calcBaud (freq) {
     return -1;
 }
 
-function scheduleReporting () {
-    const expectedPulseCnt = reportingPeriod * freq;
-    const windowTime = expectedPulseCnt * (1/freq) + (.6/freq);
-    const reportingTime = lastPulseTime.setMilliseconds(
-        lastPulseTime.getMilliseconds() + windowTime * 1000);
-    setTimeout(reporting, reportingTime - new Date());
+function endCountingWindow (t, nPulses) {
+    const expectedPulseCnt = countingPeriod * freq;
+    const err = nPulses - expectedPulseCnt;
+
+    sofarExpectedPulses += expectedPulseCnt;
+    sofarMeasuredPulses += nPulses;
+    var sofarErr = sofarMeasuredPulses - sofarExpectedPulses;
+
+    const timestamp = `${t.getFullYear()}-${t.getMonth()}-${t.getDate()} ${t.getHours()}:${t.getMinutes()}:${t.getSeconds()}`;
+    const ppm = Math.round(err/expectedPulseCnt * 1000000);
+    const ppmSofar = Math.round(sofarErr/sofarExpectedPulses * 1000000);
+    console.log(`${timestamp}: ${expectedPulseCnt} ${err} ${ppm} PPM ${sofarExpectedPulses} ${sofarErr} ${ppmSofar} PPM`);
+
+    if (maxCountingWindowsNum && ++countingWindowsNum == maxCountingWindowsNum)
+        process.exit(0);
 }
 
-function reporting () {
-    const expectedPulseCnt = reportingPeriod * freq;
-    const err = pulseCnt - expectedPulseCnt;
-    const now = new Date();
+function startCountingWindow (t) {
     pulseCnt = 0;
-    scheduleReporting();
-    const timeStr = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()} ${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}`;
-    console.log(`\n${timeStr}: ${err}/${expectedPulseCnt} ${err/expectedPulseCnt * 1000000} PPM`);
+    countingWindowEndTime = new Date(t);
+    countingWindowEndTime.setMilliseconds(
+        countingWindowEndTime.getMilliseconds() + countingPeriod * 1000);
+    countingTimer = setTimeout(() => {
+        const t = new Date();
+        endCountingWindow(t, pulseCnt);
+        startCountingWindow(t);
+    }, countingWindowEndTime - t);
 }
 
 if (baud == -1) {
     console.error('frequency is too high');
     process.exit(1);
 }
-if (reportingPeriod < 1/freq) {
+if (countingPeriod < pulsePeriod) {
     console.error('reporting period too short');
     process.exit(1);
 }
@@ -92,19 +124,10 @@ const port = new serialport(argv.device, {
     }
 });
 port.on('data', data => {
-    lastPulseTime = new Date();
-    if (! started) {
-        scheduleReporting();
-        started = true;
-        pulseCnt = 0;
-        console.log('start counting');
-    } else {
-        ++pulseCnt;
-        if (! (pulseCnt % 600))
-            process.stdout.write('+\n');
-        else if (! (pulseCnt % 60))
-            process.stdout.write('+');
-        else if (! (pulseCnt % 10))
-            process.stdout.write('.');
+    const t = new Date();
+    if (! countingTimer) {
+        startCountingWindow(t);
+        return;
     }
+    ++pulseCnt;
 });
