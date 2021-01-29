@@ -56,8 +56,8 @@ var logs = null;
 
 /**
  * The input pulse has duty cycle of 50%. The idea is to let
- * it's high half signal generate a character, hence I split
- * the duration of the high part into 9 parts -- 1 start bit
+ * it's low half signal generate a character, hence I split
+ * the duration of the low part into 9 parts -- 1 start bit
  * and 8 data bits. Low frequency pulse will yields low
  * baudrate, if the platform does not support such low baudrate,
  * I will choose the next higher baudrate. When the selected
@@ -69,9 +69,7 @@ function calcBaud (freq) {
         75, 110, 300, 600, 1200, 2400, 4800, 9600, 14400, 19200,
         38400, 57600, 115200, 12800, 256000,
     ];
-    const duration = 1/freq/2;
-    const bitTime = duration/9;
-    var baud = Math.ceil(1/bitTime) * 1.5;
+    var baud = freq * 20;
 
     for (var i = 0; i < standardBauds.length; ++i) {
         if (standardBauds[i] >= baud) {
