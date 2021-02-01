@@ -130,7 +130,7 @@ if (capturePeriod < 1/freq) {
 }
 if (argv.log) {
     logs = fs.createWriteStream(argv.log);
-    logs.write('Time,ExpectedPulses,Error,PPM\n');
+    logs.write('Time,ExpectedPulses,Error,PPM,ExpectedPulsesSofar,ErrorSofar,PPMSofar\n');
 }
 console.log('use baudrate ' + baud);
 
