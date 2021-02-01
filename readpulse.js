@@ -21,12 +21,12 @@ const argv = yargs(hideBin(process.argv))
     .describe('b', 'baudrate (auto-calc from the frequency if not specified)')
 
     .alias('p', 'period')
-    .describe('p', 'counting period in secs')
-    .default('p', 3600)
+    .describe('p', 'capture period in secs')
+    .default('p', 120)
 
-    .number('stop')
+    .number('stop-after')
     .alias('s', 'stop-after')
-    .describe('s', 'stop after n counting periods')
+    .describe('s', 'stop after n capture windows')
 
     .option('log')
     .alias('l', 'log')
@@ -41,17 +41,10 @@ const argv = yargs(hideBin(process.argv))
     .epilog('copyright 2029')
     .argv;
 
-const countingPeriod = +argv.period; /* secs  */
+const capturePeriod = +argv.period; /* secs  */
 const freq = +argv.freq;
-const pulsePeriod = 1/freq;
 const baud = (! argv.baud) ? calcBaud(freq) : argv.baud;
-const maxCountingWindowsNum = argv.s;
-var countingTimer = null;
-var countingWindowEndTime;
-var pulseCnt;
-var sofarExpectedPulses = 0;
-var sofarMeasuredPulses = 0;
-var countingWindowsNum = 0;
+var captureWnd = null;
 var logs = null;
 
 /**
@@ -80,42 +73,58 @@ function calcBaud (freq) {
     return -1;
 }
 
-function endCountingWindow (t, nPulses) {
-    const expectedPulseCnt = countingPeriod * freq;
-    const err = nPulses - expectedPulseCnt;
+function captureWindow (period, freq, nCaptures, onEnd) {
+    const normPulseCntPerWnd = period * freq;
+    var pulseCnt = 0;
+    var lastPulseCnt = 0;
+    var captureNum = 0;
+    var stopped = false;
 
-    sofarExpectedPulses += expectedPulseCnt;
-    sofarMeasuredPulses += nPulses;
-    var sofarErr = sofarMeasuredPulses - sofarExpectedPulses;
+    function capture (t) {
+        const n = pulseCnt;
+        const err = (n - lastPulseCnt) - normPulseCntPerWnd;
+        var sofarExpectedPulses = normPulseCntPerWnd * ++captureNum;
+        var sofarErr = n - sofarExpectedPulses;
 
-    const timestamp = `${t.getFullYear()}-${t.getMonth()}-${t.getDate()} ${t.getHours()}:${t.getMinutes()}:${t.getSeconds()}`;
-    const ppm = Math.round(err/expectedPulseCnt * 1000000);
-    const ppmSofar = Math.round(sofarErr/sofarExpectedPulses * 1000000);
-    console.log(`${timestamp}: ${expectedPulseCnt} ${err} ${ppm} PPM ${sofarExpectedPulses} ${sofarErr} ${ppmSofar} PPM`);
-    if (logs)
-        logs.write(`${t.valueOf()},${expectedPulseCnt},${err},${ppm}\n`);
+        const timestamp = `${t.getFullYear()}-${t.getMonth()}-${t.getDate()} ${t.getHours()}:${t.getMinutes()}:${t.getSeconds()}`;
+        const ppm = Math.round(err/normPulseCntPerWnd * 1000000);
+        const ppmSofar = Math.round(sofarErr/sofarExpectedPulses * 1000000);
+        console.log(`${captureNum}# ${timestamp}: ${normPulseCntPerWnd} ${err} ${ppm} PPM ${sofarExpectedPulses} ${sofarErr} ${ppmSofar} PPM`);
+        if (logs)
+            logs.write(`${t.valueOf()},${normPulseCntPerWnd},${err},${ppm},${sofarExpectedPulses},${sofarErr},${ppmSofar}\n`);
 
-    if (maxCountingWindowsNum && ++countingWindowsNum == maxCountingWindowsNum)
-        process.exit(0);
-}
+        if (nCaptures && captureNum == nCaptures) {
+            if (onEnd) onEnd(null);
+            stopped = true;
+        }
 
-function startCountingWindow (t) {
-    pulseCnt = 0;
-    countingWindowEndTime = new Date(t);
-    countingWindowEndTime.setMilliseconds(
-        countingWindowEndTime.getMilliseconds() + countingPeriod * 1000);
-    countingTimer = setTimeout(() => {
-        const t = new Date();
-        endCountingWindow(t, pulseCnt);
-        startCountingWindow(t);
-    }, countingWindowEndTime - t);
+        lastPulseCnt = n;
+    }
+
+    function scheduleCapture (t) {
+        const captureTime = new Date(t);
+        captureTime.setMilliseconds(
+            captureTime.getMilliseconds() + period * 1000);
+        setTimeout(() => {
+            const t = new Date();
+            capture(t);
+            if (! stopped) scheduleCapture(t);
+        }, captureTime - t);
+    }
+
+    scheduleCapture(new Date());
+    return {
+        incPulse: cnt => {
+            pulseCnt += cnt;
+        },
+    }
 }
 
 if (baud == -1) {
     console.error('frequency is too high');
     process.exit(1);
 }
-if (countingPeriod < pulsePeriod) {
+if (capturePeriod < 1/freq) {
     console.error('reporting period too short');
     process.exit(1);
 }
@@ -134,12 +143,13 @@ const port = new serialport(argv.device, {
     }
 });
 port.on('data', data => {
-    const t = new Date();
-    if (! countingTimer) {
-        startCountingWindow(t);
-        return;
-    }
-    ++pulseCnt;
+    if (! captureWnd)
+        captureWnd = captureWindow(capturePeriod, freq, argv.stopAfter, () => {
+            if (logs) logs.end();
+            process.exit(0);
+        });
+    else
+        captureWnd.incPulse(data.length);
 });
 
 process.on('SIGINT', () => {
